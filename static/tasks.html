@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>任务时间线 - 任务提醒控制台</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body class="timeline-page">
+    <div class="background-accent"></div>
+    <div class="app-shell timeline-shell">
+        <header class="page-hero timeline-hero">
+            <div class="hero-body">
+                <p class="eyebrow">任务时间线</p>
+                <h1>所有任务一览</h1>
+                <p class="hero-subtitle">此页面汇总系统中所有任务，并按照开始时间从早到晚排序，便于快速查看。</p>
+            </div>
+            <div class="hero-actions">
+                <a class="button-link" href="/">返回控制台</a>
+            </div>
+        </header>
+
+        <main class="timeline-main">
+            <section class="panel timeline-panel">
+                <div class="section-head">
+                    <h2>任务总览</h2>
+                    <p>日期从最早到最晚依次排列，实时展示所有任务。</p>
+                </div>
+                <div class="timeline-summary">
+                    <div>共 <strong id="timeline-count">0</strong> 条任务</div>
+                    <button type="button" class="secondary" id="refresh-timeline">刷新</button>
+                </div>
+                <div id="timeline-status" class="status-line hidden" role="status" aria-live="polite"></div>
+                <div id="timeline-list" class="timeline-list" role="list"></div>
+            </section>
+        </main>
+    </div>
+
+    <script type="module" src="/static/tasks.js"></script>
+</body>
+</html>
