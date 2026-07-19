@@ -1,197 +1,187 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>任务提醒控制台</title>
+    <meta name="theme-color" content="#f7f8fa" />
+    <title>任务提醒</title>
     <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body class="dashboard-page">
-    <div class="background-accent"></div>
+    <header class="topbar">
+        <div class="topbar-inner">
+            <a class="brand" href="/" aria-label="任务提醒首页">
+                <span class="brand-mark" aria-hidden="true">T</span>
+                <span class="brand-name">任务提醒</span>
+            </a>
+            <nav class="main-nav" aria-label="主导航">
+                <a class="nav-link active" href="/" aria-current="page">任务管理</a>
+                <a class="nav-link" href="/tasks">时间线</a>
+            </nav>
+        </div>
+    </header>
+
     <div class="app-shell">
-        <header class="page-hero">
-            <div class="hero-body">
-                <p class="eyebrow">任务节奏</p>
-                <h1>极简任务提醒控制台</h1>
-                <p class="hero-subtitle">统一维护任务节奏，随时查看起止窗口与 Webhook 状态。</p>
+        <header class="page-heading">
+            <div>
+                <p class="page-kicker">工作台</p>
+                <h1>任务与提醒</h1>
             </div>
-            <div class="hero-actions">
-                <a class="button-link" href="/tasks">查看任务时间线</a>
-            </div>
+            <p class="page-context">北京时间 · 飞书通知</p>
         </header>
 
-        <section class="overview-grid" aria-label="控制台概览">
-            <article class="overview-card">
-                <span class="overview-label">任务总数</span>
+        <section class="overview-grid" aria-label="任务概览">
+            <article class="overview-item">
+                <span class="overview-label">全部任务</span>
                 <strong class="overview-value" id="metric-total-tasks">0</strong>
-                <span class="overview-meta">当前系统中的全部任务</span>
             </article>
-            <article class="overview-card">
-                <span class="overview-label">待开始提醒</span>
+            <article class="overview-item">
+                <span class="overview-label">待开始</span>
                 <strong class="overview-value" id="metric-pending-start">0</strong>
-                <span class="overview-meta">尚未发送开始提醒的任务</span>
             </article>
-            <article class="overview-card">
-                <span class="overview-label">待截止提醒</span>
+            <article class="overview-item">
+                <span class="overview-label">待截止</span>
                 <strong class="overview-value" id="metric-pending-end">0</strong>
-                <span class="overview-meta">已设置截止时间且未提醒</span>
             </article>
-            <article class="overview-card">
-                <span class="overview-label">通知状态</span>
-                <strong class="overview-value" id="metric-webhook-state">未配置</strong>
+            <article class="overview-item overview-notification">
+                <span class="overview-label">飞书通知</span>
+                <strong class="overview-value overview-state" id="metric-webhook-state">未配置</strong>
                 <span class="overview-meta" id="metric-daily-time">每日提醒时间：09:00</span>
             </article>
         </section>
 
         <main class="dashboard-main">
-            <section id="task-panel" class="panel">
+            <section id="task-panel" class="workspace-section task-editor">
                 <div class="section-head">
-                    <h2>任务管理</h2>
-                    <p>快速创建或编辑提醒，精准控制时间窗口。</p>
+                    <div>
+                        <p class="section-kicker">任务</p>
+                        <h2>新建任务</h2>
+                    </div>
+                    <span class="section-note">时间均按北京时间保存</span>
                 </div>
+
                 <form id="task-form">
-                    <div class="form-grid">
-                        <div>
+                    <div class="form-grid task-basics">
+                        <div class="field field-wide">
                             <label for="title">任务标题</label>
-                            <input id="title" name="title" type="text" placeholder="例如：周会前 30 分钟准备资料" required />
+                            <input id="title" name="title" type="text" maxlength="200" placeholder="例如：准备周会资料" required />
                         </div>
-                        <div>
-                            <label for="description">备注</label>
-                            <textarea id="description" name="description" placeholder="可选：补充备注或会议链接"></textarea>
+                        <div class="field field-wide">
+                            <label for="description">备注 <span class="optional">可选</span></label>
+                            <textarea id="description" name="description" maxlength="2000" rows="3" placeholder="补充说明、链接或交付内容"></textarea>
                         </div>
                     </div>
 
+                    <div class="form-divider" role="presentation"></div>
+
                     <div class="schedule-grid">
-                        <div class="time-card">
-                            <div class="field-head">
-                                <label>开始时间</label>
-                                <span class="field-subtitle">选择提醒粒度</span>
-                            </div>
-                            <div class="chip-row" role="radiogroup" aria-label="开始时间模式">
-                                <label class="chip-option">
+                        <fieldset class="schedule-fieldset">
+                            <legend>开始 <span>必填</span></legend>
+                            <div class="segmented-control" role="radiogroup" aria-label="开始时间模式">
+                                <label class="segment-option">
                                     <input type="radio" name="start-mode" value="minute" checked />
-                                    <span class="chip-body">
-                                        <span class="chip-title">具体时间</span>
-                                        <span class="chip-note">适合分钟级提醒</span>
-                                    </span>
+                                    <span>具体时间</span>
                                 </label>
-                                <label class="chip-option">
+                                <label class="segment-option">
                                     <input type="radio" name="start-mode" value="day" />
-                                    <span class="chip-body">
-                                        <span class="chip-title">全天</span>
-                                        <span class="chip-note">整日任务或全天候提醒</span>
-                                    </span>
+                                    <span>全天</span>
                                 </label>
                             </div>
                             <div class="input-stack" id="start-datetime-field">
-                                <div class="input-shell">
-                                    <input id="start-datetime" type="datetime-local" />
-                                </div>
-                                <span class="format-hint">YYYY / MM / DD HH:MM</span>
+                                <label class="sr-only" for="start-datetime">开始日期与时间</label>
+                                <input id="start-datetime" type="datetime-local" />
                             </div>
                             <div class="input-stack hidden" id="start-date-field">
-                                <div class="input-shell">
-                                    <input id="start-date" type="date" />
-                                </div>
-                                <span class="format-hint">YYYY / MM / DD</span>
+                                <label class="sr-only" for="start-date">开始日期</label>
+                                <input id="start-date" type="date" />
                             </div>
-                        </div>
+                        </fieldset>
 
-                        <div class="time-card">
-                            <div class="field-head">
-                                <label>结束时间（可选）</label>
-                                <span class="field-subtitle">可单选全天或具体时点</span>
-                            </div>
+                        <fieldset class="schedule-fieldset">
+                            <legend>截止 <span>可选</span></legend>
                             <div id="end-fields" class="end-field-stack">
-                                <div class="chip-row" role="radiogroup" aria-label="结束时间模式">
-                                    <label class="chip-option">
+                                <div class="segmented-control" role="radiogroup" aria-label="结束时间模式">
+                                    <label class="segment-option">
                                         <input type="radio" name="end-mode" value="minute" checked />
-                                        <span class="chip-body">
-                                            <span class="chip-title">具体时间</span>
-                                            <span class="chip-note">为结束节点设定精确时间</span>
-                                        </span>
+                                        <span>具体时间</span>
                                     </label>
-                                    <label class="chip-option">
+                                    <label class="segment-option">
                                         <input type="radio" name="end-mode" value="day" />
-                                        <span class="chip-body">
-                                            <span class="chip-title">全天</span>
-                                            <span class="chip-note">结束与开始保持全天一致</span>
-                                        </span>
+                                        <span>全天</span>
                                     </label>
                                 </div>
                                 <div class="input-stack" id="end-datetime-field">
-                                    <div class="input-shell">
-                                        <input id="end-datetime" type="datetime-local" />
-                                    </div>
-                                    <span class="format-hint">YYYY / MM / DD HH:MM</span>
+                                    <label class="sr-only" for="end-datetime">截止日期与时间</label>
+                                    <input id="end-datetime" type="datetime-local" />
                                 </div>
                                 <div class="input-stack hidden" id="end-date-field">
-                                    <div class="input-shell">
-                                        <input id="end-date" type="date" />
-                                    </div>
-                                    <span class="format-hint">YYYY / MM / DD</span>
+                                    <label class="sr-only" for="end-date">截止日期</label>
+                                    <input id="end-date" type="date" />
                                 </div>
                             </div>
-                        </div>
+                        </fieldset>
                     </div>
 
-                    <div class="option-card">
-                        <div class="field-head">
-                            <label for="daily-reminder">每日提醒</label>
-                            <span class="field-subtitle">开启后将按照系统设置的时间每天提醒一次</span>
-                        </div>
-                        <label class="toggle-option">
-                            <input type="checkbox" id="daily-reminder" />
-                            <span class="toggle-copy">
-                                <span class="toggle-title">开启每日提醒</span>
-                                <span class="toggle-note">遵循系统默认提醒时间</span>
-                            </span>
-                        </label>
-                    </div>
+                    <label class="toggle-row" for="daily-reminder">
+                        <span class="toggle-copy">
+                            <span class="toggle-title">每日提醒</span>
+                            <span class="toggle-note">在任务有效期内，每天按设置时间推送</span>
+                        </span>
+                        <input type="checkbox" id="daily-reminder" />
+                        <span class="toggle-control" aria-hidden="true"></span>
+                    </label>
 
-                    <div class="controls-row form-actions">
-                        <button class="primary" type="submit" id="submit-task">保存任务</button>
-                        <button class="ghost hidden" type="button" id="cancel-edit">取消编辑</button>
+                    <div class="form-actions">
+                        <div class="button-group">
+                            <button class="primary" type="submit" id="submit-task">保存任务</button>
+                            <button class="secondary hidden" type="button" id="cancel-edit">取消编辑</button>
+                        </div>
                         <span id="task-status" class="status-line hidden" role="status" aria-live="polite"></span>
                     </div>
                 </form>
             </section>
 
-            <section id="settings-panel" class="panel">
-                <div class="section-head">
-                    <h2>系统设置</h2>
-                    <p>配置通知窗口、Webhook 地址与每日提醒时间。</p>
+            <aside id="settings-panel" class="workspace-section settings-panel">
+                <div class="section-head compact">
+                    <div>
+                        <p class="section-kicker">通知</p>
+                        <h2>提醒设置</h2>
+                    </div>
                 </div>
                 <form id="settings-form">
-                    <div class="form-grid">
-                        <div>
-                            <label for="deadline-minutes">距离截止前提醒（分钟）</label>
-                            <input id="deadline-minutes" type="number" min="1" max="10080" required />
+                    <div class="field">
+                        <label for="webhook">飞书 Webhook</label>
+                        <input id="webhook" type="url" maxlength="500" placeholder="https://open.feishu.cn/..." />
+                        <small class="input-hint">留空时暂停所有飞书推送</small>
+                    </div>
+                    <div class="settings-pair">
+                        <div class="field">
+                            <label for="deadline-minutes">提前提醒</label>
+                            <div class="input-with-suffix">
+                                <input id="deadline-minutes" type="number" min="1" max="10080" required />
+                                <span>分钟</span>
+                            </div>
                         </div>
-                        <div>
-                            <label for="webhook">Webhook 地址</label>
-                            <input id="webhook" type="url" placeholder="https://example.com/webhook" />
-                            <small class="input-hint">留空可暂时关闭飞书提醒；测试推送时需要填写完整地址。</small>
-                        </div>
-                        <div>
-                            <label for="daily-reminder-time">每日提醒时间</label>
+                        <div class="field">
+                            <label for="daily-reminder-time">每日时间</label>
                             <input id="daily-reminder-time" type="time" required />
-                            <small class="input-hint">24 小时制，例如 09:00</small>
                         </div>
                     </div>
-                    <div class="controls-row form-actions">
-                        <button class="primary" type="submit">保存设置</button>
+                    <div class="settings-actions">
+                        <button class="primary" type="submit" id="save-settings">保存设置</button>
                         <button class="secondary" type="button" id="test-webhook">测试推送</button>
-                        <span id="settings-status" class="status-line hidden" role="status" aria-live="polite"></span>
                     </div>
+                    <span id="settings-status" class="status-line hidden" role="status" aria-live="polite"></span>
                 </form>
-            </section>
+            </aside>
 
-            <section id="list-panel" class="panel">
-                <div class="section-head">
-                    <h2>任务列表</h2>
-                    <p>实时监控每条提醒的状态。</p>
-                    <p><a class="inline-link" href="/tasks">打开任务总览页</a></p>
+            <section id="list-panel" class="workspace-section task-list-section">
+                <div class="section-head list-head">
+                    <div>
+                        <p class="section-kicker">当前</p>
+                        <h2>任务列表</h2>
+                    </div>
+                    <a class="text-link" href="/tasks">时间线视图 <span aria-hidden="true">→</span></a>
                 </div>
                 <div class="table-wrapper">
                     <table class="task-table">
@@ -200,14 +190,14 @@
                             <tr>
                                 <th scope="col">任务</th>
                                 <th scope="col">开始</th>
-                                <th scope="col">结束</th>
-                                <th scope="col">状态</th>
-                                <th scope="col">提醒模式</th>
-                                <th scope="col">操作</th>
+                                <th scope="col">截止</th>
+                                <th scope="col">推送状态</th>
+                                <th scope="col">频率</th>
+                                <th scope="col"><span class="sr-only">操作</span></th>
                             </tr>
                         </thead>
                         <tbody id="task-table-body">
-                            <tr><td colspan="6">暂无任务，请先新建一条</td></tr>
+                            <tr class="empty-row"><td colspan="6">暂无任务</td></tr>
                         </tbody>
                     </table>
                 </div>

@@ -24,6 +24,14 @@
 
 > 建议始终使用 `python -m uvicorn`（或虚拟环境中的解释器）启动，这样能确保运行时依赖与当前 Python 环境一致。
 
+## 运行测试
+安装包含测试工具的开发依赖后，运行完整回归测试：
+```bash
+pip install -r requirements-dev.txt
+python -m unittest discover -s tests -v
+python -m compileall -q app tests
+```
+
 ## 飞书机器人配置
 1. 在飞书群聊或单聊中创建自定义机器人，获取 Webhook 地址。
 2. 在页面“提醒设置”中填入 Webhook 并保存。
@@ -44,7 +52,7 @@
 - `TODO_SQLITE_TIMEOUT_SECONDS`：SQLite 连接超时时间，默认 `30`。
 - `TODO_SQLITE_BUSY_TIMEOUT_MS`：SQLite 忙等待时间，默认 `30000`。
 - `TODO_WEBHOOK_TIMEOUT_SECONDS`：飞书 Webhook 请求超时，默认 `5`。
-- `TODO_NOTIFICATION_CLAIM_TTL_SECONDS`：提醒认领有效期，默认 `90`。
+- `TODO_NOTIFICATION_CLAIM_TTL_SECONDS`：提醒认领有效期，默认 `90`，且不会短于 Webhook 超时加 5 秒。
 
 ## 目录结构
 ```text
@@ -60,6 +68,7 @@ static/
   app.js           # 主页面逻辑
   tasks.js         # 时间线页面逻辑
   styles.css       # 样式
+tests/             # API、数据库与提醒服务回归测试
 ```
 
 ## 时区说明

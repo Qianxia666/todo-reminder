@@ -29,6 +29,8 @@ const selectors = {
     metricPendingEnd: document.getElementById("metric-pending-end"),
     metricWebhookState: document.getElementById("metric-webhook-state"),
     metricDailyTime: document.getElementById("metric-daily-time"),
+    taskHeading: document.querySelector("#task-panel h2"),
+    saveSettings: document.getElementById("save-settings"),
 };
 
 const startModeRadios = document.querySelectorAll('input[name="start-mode"]');
@@ -311,6 +313,9 @@ async function handleTaskSubmit(event) {
     const isEdit = Boolean(state.editingId);
     const url = isEdit ? `/api/tasks/${state.editingId}` : "/api/tasks";
     const method = isEdit ? "PUT" : "POST";
+    selectors.submitTask.disabled = true;
+    selectors.submitTask.setAttribute("aria-busy", "true");
+    selectors.submitTask.textContent = isEdit ? "更新中..." : "保存中...";
     try {
         const response = await fetch(url, {
             method,
@@ -326,6 +331,10 @@ async function handleTaskSubmit(event) {
         await loadTasks({ preserveTaskStatus: true });
     } catch (error) {
         setTaskStatus(getErrorMessage(error, "保存任务失败"), true);
+    } finally {
+        selectors.submitTask.disabled = false;
+        selectors.submitTask.removeAttribute("aria-busy");
+        selectors.submitTask.textContent = state.editingId ? "更新任务" : "保存任务";
     }
 }
 
@@ -369,6 +378,7 @@ function resetTaskForm() {
     selectors.dailyReminder.checked = false;
     selectors.cancelEdit.classList.add("hidden");
     selectors.submitTask.textContent = "保存任务";
+    selectors.taskHeading.textContent = "新建任务";
     setTaskStatus("", false);
     syncStartModeVisibility();
     syncEndModeVisibility();
@@ -379,6 +389,7 @@ function beginEditTask(taskId) {
     if (!task) return;
     setTaskStatus("", false);
     state.editingId = taskId;
+    selectors.taskHeading.textContent = "编辑任务";
     selectors.title.value = task.title;
     selectors.description.value = task.description || "";
 
@@ -435,6 +446,12 @@ function formatInputDateTime(value) {
 
 async function deleteTask(taskId) {
     if (!confirm("确定删除该任务吗？")) return;
+    const deleteButton = selectors.tableBody.querySelector(`button[data-delete="${taskId}"]`);
+    if (deleteButton) {
+        deleteButton.disabled = true;
+        deleteButton.setAttribute("aria-busy", "true");
+        deleteButton.textContent = "删除中...";
+    }
     try {
         const response = await fetch(`/api/tasks/${taskId}`, { method: "DELETE" });
         if (!response.ok) throw new Error(await readApiErrorMessage(response, "删除失败"));
@@ -445,6 +462,12 @@ async function deleteTask(taskId) {
         setTaskStatus("任务已删除");
     } catch (error) {
         setTaskStatus(getErrorMessage(error, "删除任务失败"), true);
+    } finally {
+        if (deleteButton?.isConnected) {
+            deleteButton.disabled = false;
+            deleteButton.removeAttribute("aria-busy");
+            deleteButton.textContent = uiText.table.delete;
+        }
     }
 }
 
@@ -481,6 +504,9 @@ async function handleSettingsSubmit(event) {
         deadline_notice_minutes: Number(selectors.deadline.value) || 1,
         daily_reminder_time: selectors.dailyReminderTime.value || "09:00",
     };
+    selectors.saveSettings.disabled = true;
+    selectors.saveSettings.setAttribute("aria-busy", "true");
+    selectors.saveSettings.textContent = "保存中...";
     try {
         const response = await fetch("/api/settings", {
             method: "POST",
@@ -502,6 +528,10 @@ async function handleSettingsSubmit(event) {
         setSettingsStatus("设置已保存");
     } catch (error) {
         setSettingsStatus(getErrorMessage(error, "保存设置失败"), true);
+    } finally {
+        selectors.saveSettings.disabled = false;
+        selectors.saveSettings.removeAttribute("aria-busy");
+        selectors.saveSettings.textContent = "保存设置";
     }
 }
 
@@ -512,6 +542,9 @@ async function handleTestWebhook() {
         setSettingsStatus("请输入 Webhook 地址", true);
         return;
     }
+    selectors.testWebhook.disabled = true;
+    selectors.testWebhook.setAttribute("aria-busy", "true");
+    selectors.testWebhook.textContent = "测试中...";
     setSettingsStatus("测试请求正在进行中……", false);
     try {
         const response = await fetch("/api/settings/test", {
@@ -526,6 +559,10 @@ async function handleTestWebhook() {
         setSettingsStatus(data.message || "连接测试成功");
     } catch (error) {
         setSettingsStatus(getErrorMessage(error, "连接测试失败"), true);
+    } finally {
+        selectors.testWebhook.disabled = false;
+        selectors.testWebhook.removeAttribute("aria-busy");
+        selectors.testWebhook.textContent = "测试推送";
     }
 }
 

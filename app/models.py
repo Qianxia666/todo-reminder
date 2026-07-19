@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Optional
 from urllib.parse import urlparse
@@ -10,6 +11,8 @@ from .timezone import ensure_beijing
 
 
 def _validate_hhmm(value: str) -> str:
+    if re.fullmatch(r"\d{2}:\d{2}", value) is None:
+        raise ValueError("daily reminder time must be in HH:MM 24h format")
     try:
         datetime.strptime(value, "%H:%M")
     except ValueError as exc:
@@ -43,10 +46,30 @@ def _normalize_webhook_url(value: object, *, allow_blank: bool) -> str:
     return url
 
 
-def _end_must_not_be_before_start(start_at: datetime, end_at: Optional[datetime]) -> None:
+def _normalize_boundary(value: datetime, all_day: bool, *, is_end: bool) -> datetime:
+    normalized = ensure_beijing(value)
+    if not all_day:
+        return normalized
+    return normalized.replace(
+        hour=23 if is_end else 0,
+        minute=59 if is_end else 0,
+        second=0,
+        microsecond=0,
+    )
+
+
+def _end_must_not_be_before_start(
+    start_at: datetime,
+    end_at: Optional[datetime],
+    *,
+    start_all_day: bool = False,
+    end_all_day: bool = False,
+) -> None:
     if end_at is None:
         return
-    if ensure_beijing(end_at) < ensure_beijing(start_at):
+    normalized_start = _normalize_boundary(start_at, start_all_day, is_end=False)
+    normalized_end = _normalize_boundary(end_at, end_all_day, is_end=True)
+    if normalized_end < normalized_start:
         raise ValueError("End time must be after start time")
 
 
@@ -76,7 +99,12 @@ class TaskBase(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_end_after_start(self) -> "TaskBase":
-        _end_must_not_be_before_start(self.start_at, self.end_at)
+        _end_must_not_be_before_start(
+            self.start_at,
+            self.end_at,
+            start_all_day=self.start_all_day,
+            end_all_day=self.end_all_day,
+        )
         return self
 
 
@@ -112,8 +140,18 @@ class TaskUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_end_after_start(self) -> "TaskUpdate":
-        if self.start_at is not None:
-            _end_must_not_be_before_start(self.start_at, self.end_at)
+        if (
+            self.start_at is not None
+            and self.end_at is not None
+            and self.start_all_day is not None
+            and self.end_all_day is not None
+        ):
+            _end_must_not_be_before_start(
+                self.start_at,
+                self.end_at,
+                start_all_day=self.start_all_day,
+                end_all_day=self.end_all_day,
+            )
         return self
 
 

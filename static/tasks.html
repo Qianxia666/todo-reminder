@@ -1,34 +1,42 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>任务时间线 - 任务提醒控制台</title>
+    <meta name="theme-color" content="#f7f8fa" />
+    <title>任务时间线 - 任务提醒</title>
     <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body class="timeline-page">
-    <div class="background-accent"></div>
+    <header class="topbar">
+        <div class="topbar-inner">
+            <a class="brand" href="/" aria-label="任务提醒首页">
+                <span class="brand-mark" aria-hidden="true">T</span>
+                <span class="brand-name">任务提醒</span>
+            </a>
+            <nav class="main-nav" aria-label="主导航">
+                <a class="nav-link" href="/">任务管理</a>
+                <a class="nav-link active" href="/tasks" aria-current="page">时间线</a>
+            </nav>
+        </div>
+    </header>
+
     <div class="app-shell timeline-shell">
-        <header class="page-hero timeline-hero">
-            <div class="hero-body">
-                <p class="eyebrow">任务时间线</p>
-                <h1>所有任务一览</h1>
-                <p class="hero-subtitle">此页面汇总系统中所有任务，并按照开始时间从早到晚排序，便于快速查看。</p>
+        <header class="page-heading">
+            <div>
+                <p class="page-kicker">总览</p>
+                <h1>任务时间线</h1>
             </div>
-            <div class="hero-actions">
-                <a class="button-link" href="/">返回控制台</a>
-            </div>
+            <p class="page-context">按开始时间从早到晚排列</p>
         </header>
 
         <main class="timeline-main">
-            <section class="panel timeline-panel">
-                <div class="section-head">
-                    <h2>任务总览</h2>
-                    <p>日期从最早到最晚依次排列，实时展示所有任务。</p>
-                </div>
-                <div class="timeline-summary">
-                    <div>共 <strong id="timeline-count">0</strong> 条任务</div>
-                    <button type="button" class="secondary" id="refresh-timeline">刷新</button>
+            <section class="timeline-workspace">
+                <div class="timeline-toolbar">
+                    <div class="timeline-count">共 <strong id="timeline-count">0</strong> 条任务</div>
+                    <button type="button" class="icon-button" id="refresh-timeline" aria-label="刷新任务" title="刷新任务">
+                        <span aria-hidden="true">↻</span>
+                    </button>
                 </div>
                 <div id="timeline-status" class="status-line hidden" role="status" aria-live="polite"></div>
                 <div id="timeline-list" class="timeline-list" role="list"></div>

@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 from fastapi import FastAPI, HTTPException, Response
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from starlette.types import Scope
 
 from . import database
@@ -45,12 +45,6 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Feishu Task Reminder", version="0.2.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 app.mount("/static", NoCacheStaticFiles(directory=FRONTEND_DIR), name="static")
 
 
@@ -216,7 +210,7 @@ async def test_settings_connectivity(payload: WebhookTestRequest) -> Dict[str, s
     webhook = payload.webhook_url.strip()
     if not webhook:
         raise HTTPException(status_code=400, detail="Webhook 地址不能为空")
-    success, detail = reminder_service.send_test_message(webhook)
+    success, detail = await run_in_threadpool(reminder_service.send_test_message, webhook)
     if not success:
         raise HTTPException(status_code=400, detail=detail or "Webhook 测试失败")
     return {"status": "ok", "message": "测试消息已成功发送到 Webhook"}

@@ -53,6 +53,10 @@ function init() {
 }
 
 async function loadTasks(isManual) {
+    if (selectors.refresh) {
+        selectors.refresh.disabled = true;
+        selectors.refresh.setAttribute("aria-busy", "true");
+    }
     setStatus(isManual ? text.loadingManual : text.loadingInitial, false);
     try {
         const response = await fetch("/api/tasks");
@@ -66,6 +70,11 @@ async function loadTasks(isManual) {
         selectors.list.innerHTML = "";
         selectors.count.textContent = "0";
         setStatus(error.message || text.loadError, true);
+    } finally {
+        if (selectors.refresh) {
+            selectors.refresh.disabled = false;
+            selectors.refresh.removeAttribute("aria-busy");
+        }
     }
 }
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import datetime, time as dtime, timedelta
 from threading import Event, Lock, Thread
@@ -15,8 +16,32 @@ from .timezone import BEIJING_TZ, ensure_beijing, now_in_beijing
 
 logger = logging.getLogger(__name__)
 
-WEBHOOK_TIMEOUT_SECONDS = float(os.getenv("TODO_WEBHOOK_TIMEOUT_SECONDS", "5"))
-DEFAULT_CLAIM_TTL_SECONDS = int(os.getenv("TODO_NOTIFICATION_CLAIM_TTL_SECONDS", "90"))
+def _env_float(name: str, default: float, *, minimum: float) -> float:
+    raw = os.getenv(name)
+    try:
+        value = float(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        value = default
+    if not math.isfinite(value) or value < minimum:
+        return default
+    return value
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    raw = os.getenv(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        value = default
+    return value if value >= minimum else default
+
+
+WEBHOOK_TIMEOUT_SECONDS = _env_float("TODO_WEBHOOK_TIMEOUT_SECONDS", 5.0, minimum=0.1)
+MIN_CLAIM_TTL_SECONDS = math.ceil(WEBHOOK_TIMEOUT_SECONDS) + 5
+DEFAULT_CLAIM_TTL_SECONDS = max(
+    _env_int("TODO_NOTIFICATION_CLAIM_TTL_SECONDS", 90, minimum=1),
+    MIN_CLAIM_TTL_SECONDS,
+)
 
 
 def _is_valid_webhook_url(webhook: str) -> bool:
@@ -89,7 +114,7 @@ def _post_webhook_text(webhook: str, message: str) -> Tuple[bool, str]:
 
 
 def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
-    if not value:
+    if not isinstance(value, str) or not value:
         return None
     try:
         return ensure_beijing(datetime.fromisoformat(value))
@@ -126,12 +151,12 @@ def _build_message(header: str, rows: List[Tuple[str, str]], footer: Optional[st
 
 
 def _parse_hhmm(value: Optional[str]) -> Optional[dtime]:
-    if not value:
+    if not isinstance(value, str) or not value:
         return None
     try:
         hour, minute = map(int, value.split(":", 1))
         return dtime(hour=hour, minute=minute, tzinfo=BEIJING_TZ)
-    except ValueError:
+    except (AttributeError, TypeError, ValueError):
         logger.warning("Invalid daily reminder time configured: %s", value)
         return None
 
@@ -148,8 +173,8 @@ class ReminderService:
     """Single-process reminder worker with DB-backed de-duplication."""
 
     def __init__(self, interval_seconds: int = 30, claim_ttl_seconds: int = DEFAULT_CLAIM_TTL_SECONDS) -> None:
-        self.interval_seconds = interval_seconds
-        self.claim_ttl_seconds = claim_ttl_seconds
+        self.interval_seconds = max(1, int(interval_seconds))
+        self.claim_ttl_seconds = max(MIN_CLAIM_TTL_SECONDS, int(claim_ttl_seconds))
         self._thread: Optional[Thread] = None
         self._stop_event = Event()
         self._lifecycle_lock = Lock()
@@ -167,9 +192,14 @@ class ReminderService:
         with self._lifecycle_lock:
             self._stop_event.set()
             thread = self._thread
-            self._thread = None
         if thread:
-            thread.join(timeout=5)
+            thread.join(timeout=max(5.0, WEBHOOK_TIMEOUT_SECONDS + 1.0))
+            if thread.is_alive():
+                logger.warning("Reminder worker did not stop before the shutdown timeout")
+                return
+            with self._lifecycle_lock:
+                if self._thread is thread:
+                    self._thread = None
             logger.info("Reminder worker stopped")
 
     def _run(self) -> None:
@@ -241,10 +271,10 @@ class ReminderService:
         if not task.get("daily_reminder"):
             return
         start_at = _parse_datetime(task.get("start_at"))
-        if not start_at or now.date() < start_at.date():
+        if not start_at or now < start_at:
             return
         end_at = _parse_datetime(task.get("end_at"))
-        if end_at and now.date() > end_at.date():
+        if end_at and now > end_at:
             return
         reminder_point = datetime.combine(now.date(), reminder_time)
         if now < reminder_point:
@@ -276,11 +306,14 @@ class ReminderService:
         daily_date: Optional[str] = None,
     ) -> bool:
         task_id = int(task["id"])
-        claimed = database.claim_notification(task_id, notification_type, notification_key, self.claim_ttl_seconds)
-        if not claimed:
+        claim_token = database.claim_notification_with_token(
+            task_id, notification_type, notification_key, self.claim_ttl_seconds
+        )
+        if not claim_token:
             return False
 
-        success = False
+        webhook_sent = False
+        completed = False
         try:
             success, detail = _post_webhook_text(webhook, message)
             if not success:
@@ -291,17 +324,21 @@ class ReminderService:
                     detail,
                 )
                 return False
+            webhook_sent = True
 
-            database.complete_notification(
+            completed = database.complete_notification(
                 task_id,
                 notification_type,
                 notification_key,
                 daily_date=daily_date,
+                claim_token=claim_token,
             )
-            return True
+            if not completed:
+                logger.info("Reminder %s for task %s was superseded before completion", notification_type, task_id)
+            return completed
         finally:
-            if not success:
-                database.release_notification_claim(task_id, notification_type, notification_key)
+            if not webhook_sent:
+                database.release_notification_claim(task_id, notification_type, notification_key, claim_token)
 
     def send_test_message(self, webhook: str) -> Tuple[bool, str]:
         timestamp = now_in_beijing().strftime("%Y-%m-%d %H:%M:%S")
