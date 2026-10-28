@@ -5,14 +5,15 @@ import logging
 import math
 import os
 from datetime import datetime, time as dtime, timedelta
+from http.client import HTTPException as HTTPProtocolException
 from threading import Event, Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from . import database
 from .timezone import BEIJING_TZ, ensure_beijing, now_in_beijing
+from .webhook_security import normalize_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +45,30 @@ DEFAULT_CLAIM_TTL_SECONDS = max(
 )
 
 
-def _is_valid_webhook_url(webhook: str) -> bool:
-    parsed = urlparse(webhook)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
+_WEBHOOK_OPENER = build_opener(_NoRedirectHandler())
+MAX_WEBHOOK_RESPONSE_BYTES = 64 * 1024
+
+
+def _open_webhook_request(request: Request):
+    return _WEBHOOK_OPENER.open(request, timeout=WEBHOOK_TIMEOUT_SECONDS)
+
+
+def _validated_webhook_url(webhook: str) -> Optional[str]:
+    try:
+        return normalize_webhook_url(webhook, allow_blank=False)
+    except (TypeError, ValueError):
+        return None
 
 
 def _post_webhook_text(webhook: str, message: str) -> Tuple[bool, str]:
-    if not _is_valid_webhook_url(webhook):
-        return False, "Webhook 地址必须是有效的 http(s) 地址"
+    validated_webhook = _validated_webhook_url(webhook)
+    if not validated_webhook:
+        return False, "Webhook 地址不符合安全策略"
 
     payload = {
         "msg_type": "text",
@@ -60,32 +77,39 @@ def _post_webhook_text(webhook: str, message: str) -> Tuple[bool, str]:
     request_body = json.dumps(payload).encode("utf-8")
     try:
         request = Request(
-            webhook,
+            validated_webhook,
             data=request_body,
             headers={"Content-Type": "application/json; charset=utf-8"},
             method="POST",
         )
     except ValueError:
-        logger.warning("Invalid webhook URL configured: %s", webhook)
+        logger.warning("Invalid webhook URL configured")
         return False, "Webhook 地址必须是有效的 http(s) 地址"
 
     status_code = 0
     response_text = ""
     try:
-        with urlopen(request, timeout=WEBHOOK_TIMEOUT_SECONDS) as response:
+        with _open_webhook_request(request) as response:
             status_code = getattr(response, "status", response.getcode())
-            response_bytes = response.read()
+            response_bytes = response.read(MAX_WEBHOOK_RESPONSE_BYTES + 1)
+            if len(response_bytes) > MAX_WEBHOOK_RESPONSE_BYTES:
+                logger.warning("Webhook response exceeded %s bytes", MAX_WEBHOOK_RESPONSE_BYTES)
+                return False, "Webhook 返回内容过大"
             encoding = response.headers.get_content_charset("utf-8")
             response_text = response_bytes.decode(encoding, errors="replace")
     except HTTPError as exc:
         status_code = exc.code
-        response_text = exc.read().decode("utf-8", errors="replace")
+        response_bytes = exc.read(MAX_WEBHOOK_RESPONSE_BYTES + 1)
+        if len(response_bytes) > MAX_WEBHOOK_RESPONSE_BYTES:
+            response_text = "<response too large>"
+        else:
+            response_text = response_bytes.decode("utf-8", errors="replace")
         detail = f"Feishu webhook responded with {status_code}"
         logger.warning("%s: %s", detail, response_text[:200])
         return False, detail
-    except (URLError, OSError) as exc:
-        logger.exception("Failed to call Feishu webhook")
+    except (URLError, OSError, HTTPProtocolException) as exc:
         detail = getattr(exc, "reason", None)
+        logger.warning("Failed to call Feishu webhook: %s", detail or exc)
         return False, str(detail or exc)
 
     response_body: Any = None
@@ -99,16 +123,23 @@ def _post_webhook_text(webhook: str, message: str) -> Tuple[bool, str]:
         logger.warning("%s: %s", detail, response_text[:200])
         return False, detail
 
-    if isinstance(response_body, dict):
-        business_code = response_body.get("code", response_body.get("StatusCode"))
-        if business_code not in (None, 0, "0"):
-            detail = str(
-                response_body.get("msg")
-                or response_body.get("StatusMessage")
-                or f"Feishu webhook business error: {business_code}"
+    if not isinstance(response_body, dict):
+        logger.warning("Webhook returned a non-JSON success response")
+        return False, "Webhook 返回格式不正确"
+
+    business_code = response_body.get("code", response_body.get("StatusCode"))
+    if business_code not in (0, "0"):
+        detail = str(
+            response_body.get("msg")
+            or response_body.get("StatusMessage")
+            or (
+                f"Feishu webhook business error: {business_code}"
+                if business_code is not None
+                else "Webhook 返回体缺少业务状态码"
             )
-            logger.warning("Feishu webhook business failure: %s", detail)
-            return False, detail
+        )
+        logger.warning("Feishu webhook business failure: %s", detail)
+        return False, detail
 
     return True, "ok"
 
@@ -181,8 +212,19 @@ class ReminderService:
 
     def start(self) -> None:
         with self._lifecycle_lock:
-            if self._thread and self._thread.is_alive():
-                return
+            thread = self._thread
+            if thread is not None and thread.is_alive():
+                if not self._stop_event.is_set():
+                    return
+                # A previous stop() timed out while this worker was finishing a
+                # cycle. Give it a moment to exit, otherwise resume it instead
+                # of leaving the service without an active worker.
+                thread.join(timeout=max(1.0, WEBHOOK_TIMEOUT_SECONDS))
+                if thread.is_alive():
+                    self._stop_event.clear()
+                    logger.info("Reminder worker resumed after an interrupted stop")
+                    return
+                self._thread = None
             self._stop_event.clear()
             self._thread = Thread(target=self._run, daemon=True, name="todo-reminder-worker")
             self._thread.start()
@@ -274,7 +316,7 @@ class ReminderService:
         if not start_at or now < start_at:
             return
         end_at = _parse_datetime(task.get("end_at"))
-        if end_at and now > end_at:
+        if end_at and now.replace(second=0, microsecond=0) > end_at:
             return
         reminder_point = datetime.combine(now.date(), reminder_time)
         if now < reminder_point:
@@ -293,7 +335,8 @@ class ReminderService:
             ],
             "请聚焦今日关键进展。",
         )
-        self._send_task_notification(task, "daily", today_iso, webhook, message, daily_date=today_iso)
+        notification_key = database.daily_notification_key(task, today_iso)
+        self._send_task_notification(task, "daily", notification_key, webhook, message, daily_date=today_iso)
 
     def _send_task_notification(
         self,

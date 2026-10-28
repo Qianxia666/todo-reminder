@@ -103,6 +103,64 @@ class TaskApiTests(unittest.TestCase):
         self.assertTrue(rescheduled["end_notified"])
         self.assertIsNone(rescheduled["last_daily_notified"])
 
+    def test_legacy_second_precision_does_not_reset_notifications_on_unrelated_update(self) -> None:
+        task = database.create_task(
+            {
+                "title": "Legacy precise task",
+                "description": None,
+                "start_at": "2026-08-01T09:30:45+08:00",
+                "start_all_day": 0,
+                "end_at": "2026-08-01T11:00:45+08:00",
+                "end_all_day": 0,
+                "daily_reminder": 1,
+            }
+        )
+        task_id = int(task["id"])
+        database.update_task(
+            task_id,
+            {"start_notified": 1, "end_notified": 1, "last_daily_notified": "2026-08-01"},
+        )
+
+        response = self.client.put(f"/api/tasks/{task_id}", json={"title": "Legacy renamed"})
+        self.assertEqual(response.status_code, 200, response.text)
+        updated = response.json()
+        self.assertEqual(updated["start_at"], "2026-08-01T09:30:00+08:00")
+        self.assertEqual(updated["end_at"], "2026-08-01T11:00:00+08:00")
+        self.assertTrue(updated["start_notified"])
+        self.assertTrue(updated["end_notified"])
+        self.assertEqual(updated["last_daily_notified"], "2026-08-01")
+
+    def test_settings_update_requires_webhook_to_avoid_silent_clearing(self) -> None:
+        base = {
+            "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/keep",
+            "deadline_notice_minutes": 45,
+            "daily_reminder_time": "08:30",
+        }
+        self.assertEqual(self.client.post("/api/settings", json=base).status_code, 200)
+
+        partial = self.client.post(
+            "/api/settings",
+            json={"deadline_notice_minutes": 5, "daily_reminder_time": "07:00"},
+        )
+        self.assertEqual(partial.status_code, 422)
+
+        settings = self.client.get("/api/settings").json()
+        self.assertEqual(settings["webhook_url"], base["webhook_url"])
+        self.assertEqual(settings["deadline_notice_minutes"], 45)
+        self.assertEqual(settings["daily_reminder_time"], "08:30")
+
+    def test_whitespace_only_title_is_rejected_for_direct_mutations(self) -> None:
+        from fastapi import HTTPException
+
+        from app.main import _build_task_mutation
+
+        task = self._create_task()
+        existing = database.get_task(int(task["id"]))
+        self.assertIsNotNone(existing)
+        with self.assertRaises(HTTPException) as raised:
+            _build_task_mutation(existing, {"title": "   "})  # type: ignore[arg-type]
+        self.assertEqual(raised.exception.status_code, 400)
+
     def test_invalid_payloads_are_rejected(self) -> None:
         blank = self.client.post("/api/tasks", json={"title": " ", "start_at": "2026-07-19T10:00"})
         self.assertEqual(blank.status_code, 422)
@@ -141,6 +199,32 @@ class TaskApiTests(unittest.TestCase):
             },
         )
         self.assertNotIn("access-control-allow-origin", response.headers)
+
+    def test_api_responses_disable_caching_and_add_security_headers(self) -> None:
+        response = self.client.get("/api/settings")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+        self.assertEqual(response.headers.get("x-content-type-options"), "nosniff")
+        self.assertEqual(response.headers.get("x-frame-options"), "DENY")
+        self.assertEqual(response.headers.get("referrer-policy"), "no-referrer")
+
+    def test_webhook_policy_rejects_http_and_unapproved_hosts(self) -> None:
+        base = {"deadline_notice_minutes": 30, "daily_reminder_time": "09:00"}
+        insecure = self.client.post(
+            "/api/settings", json={**base, "webhook_url": "http://open.feishu.cn/hook"}
+        )
+        self.assertEqual(insecure.status_code, 422)
+
+        unapproved = self.client.post(
+            "/api/settings", json={**base, "webhook_url": "https://127.0.0.1/internal"}
+        )
+        self.assertEqual(unapproved.status_code, 422)
+
+        official = self.client.post(
+            "/api/settings",
+            json={**base, "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/test"},
+        )
+        self.assertEqual(official.status_code, 200, official.text)
 
 
 if __name__ == "__main__":

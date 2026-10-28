@@ -1,9 +1,29 @@
+# Python bytecode and local environments
 __pycache__/
 *.py[cod]
 .venv/
+venv/
+
+# Local configuration and secrets
 .env
-feedback.db
-feedback.db-shm
-feedback.db-wal
+.env.*
+!.env.example
+
+# Runtime data and logs
+app/data/*.db
+app/data/*.db-*
+app/data/*.sqlite
+app/data/*.sqlite3
+*.log
+
+# Test and tooling output
 .coverage
+.pytest_cache/
+.mypy_cache/
 htmlcov/
+.idea/
+.vscode/
+
+# OS metadata
+.DS_Store
+Thumbs.db

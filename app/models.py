@@ -3,11 +3,11 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 from typing import Optional
-from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .timezone import ensure_beijing
+from .webhook_security import normalize_webhook_url
 
 
 def _validate_hhmm(value: str) -> str:
@@ -25,25 +25,6 @@ def _normalize_optional_text(value: object) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
-
-
-def _normalize_webhook_url(value: object, *, allow_blank: bool) -> str:
-    if value is None:
-        if allow_blank:
-            return ""
-        raise ValueError("Webhook 地址不能为空")
-
-    url = str(value).strip()
-    if not url:
-        if allow_blank:
-            return ""
-        raise ValueError("Webhook 地址不能为空")
-
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("Webhook 地址必须是有效的 http(s) 地址")
-
-    return url
 
 
 def _normalize_boundary(value: datetime, all_day: bool, *, is_end: bool) -> datetime:
@@ -180,7 +161,7 @@ class Settings(BaseModel):
 class SettingsUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    webhook_url: str = Field("", max_length=500)
+    webhook_url: str = Field(..., max_length=500)
     deadline_notice_minutes: int = Field(..., ge=1, le=10080)
     daily_reminder_time: str = Field(...)
 
@@ -192,7 +173,7 @@ class SettingsUpdate(BaseModel):
     @field_validator("webhook_url")
     @classmethod
     def _validate_webhook_url(cls, value: str) -> str:
-        return _normalize_webhook_url(value, allow_blank=True)
+        return normalize_webhook_url(value, allow_blank=True)
 
 
 class WebhookTestRequest(BaseModel):
@@ -203,4 +184,4 @@ class WebhookTestRequest(BaseModel):
     @field_validator("webhook_url")
     @classmethod
     def _validate_webhook_url(cls, value: str) -> str:
-        return _normalize_webhook_url(value, allow_blank=False)
+        return normalize_webhook_url(value, allow_blank=False)

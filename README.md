@@ -13,7 +13,10 @@
 1. 创建虚拟环境并安装依赖：
    ```bash
    python -m venv .venv
-   .venv\Scripts\activate
+   # Windows PowerShell
+   .venv\Scripts\Activate.ps1
+   # macOS / Linux
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 2. 启动服务：
@@ -41,11 +44,14 @@ python -m compileall -q app tests
 - 默认数据库为 SQLite，文件位于 `app/data/reminder.db`。
 - 服务启动时会自动建表，并初始化后台提醒线程。
 - SQLite 已启用 `WAL` 和 `busy_timeout`，以降低 API 请求与后台提醒并发写入时的锁冲突概率。
+- 启动时会自动兼容旧版数据库结构：先补齐新增列，再创建依赖这些列的索引，不需要手工迁移数据。
 
 ## 并发与提醒行为
 - 提醒发送前会先写入数据库认领记录，避免多线程、多进程或重复启动 worker 时重复推送同一提醒。
-- 任务时间或每日提醒配置发生变化后，会自动重置对应提醒状态，避免旧状态阻塞新提醒。
+- 任务时间发生变化时，会在同一个 SQLite 事务中更新任务并清理旧提醒认领，减少改期与后台 worker 并发造成的重复推送风险。
+- 每日提醒认领会绑定当前任务时间快照，旧日程产生的 worker 不会在任务改期后继续完成新的每日提醒。
 - 每日提醒只会在同一天成功发送一次；如果发送失败，会自动释放认领并在后续轮询中重试。
+- 时间精度按“分钟”处理；在截止分钟内（例如截止 17:00、worker 于 17:00:30 轮询）仍视为有效窗口，避免轮询间隔造成漏提醒。
 
 ## 可选环境变量
 - `TODO_DB_PATH`：自定义 SQLite 文件路径。
@@ -53,6 +59,8 @@ python -m compileall -q app tests
 - `TODO_SQLITE_BUSY_TIMEOUT_MS`：SQLite 忙等待时间，默认 `30000`。
 - `TODO_WEBHOOK_TIMEOUT_SECONDS`：飞书 Webhook 请求超时，默认 `5`。
 - `TODO_NOTIFICATION_CLAIM_TTL_SECONDS`：提醒认领有效期，默认 `90`，且不会短于 Webhook 超时加 5 秒。
+- `TODO_ALLOWED_WEBHOOK_HOSTS`：额外允许的 HTTPS Webhook 域名，多个域名用逗号分隔。默认已允许 `open.feishu.cn` 与 `open.larksuite.com`。
+- `TODO_ALLOW_INSECURE_WEBHOOK_HTTP`：仅在明确需要且网络可信时设为 `1`/`true` 允许 HTTP；默认禁止，生产环境不建议开启。
 
 ## 目录结构
 ```text
@@ -61,6 +69,7 @@ app/
   database.py      # SQLite 访问与提醒认领逻辑
   models.py        # Pydantic 数据模型与校验
   reminder.py      # 后台提醒线程与飞书推送
+  webhook_security.py # Webhook URL 安全策略
   timezone.py      # 北京时间工具
 static/
   index.html       # 主页面
@@ -82,12 +91,17 @@ tests/             # API、数据库与提醒服务回归测试
    ```
 2. 运行容器并挂载持久化数据卷：
    ```bash
-   docker run -d --name todo-reminder -p 8000:8000 -v todo_data:/app/app/data todo-reminder
+   docker run -d --name todo-reminder -p 127.0.0.1:8000:8000 -v todo_data:/app/app/data todo-reminder
    ```
-   该命令会把 SQLite 数据目录挂载到 Docker 卷 `todo_data`，容器重建后任务数据仍会保留。
+   该命令会把 SQLite 数据目录挂载到 Docker 卷 `todo_data`，容器重建后任务数据仍会保留；端口默认只绑定本机回环地址，避免无鉴权管理接口意外暴露到局域网/公网。
 3. 访问 `http://localhost:8000`。
 
 ## 常见问题
 - **没有提醒？** 请确认 Webhook 地址正确，且部署环境可以访问飞书。
 - **Webhook 返回 200 但没有真正发送？** 新版本会额外检查飞书返回体中的业务状态码，并在日志中输出失败原因。
 - **时间显示不一致？** 请确保客户端理解当前系统统一使用北京时间。
+
+## 部署安全说明
+- 该项目默认没有内置登录鉴权，适合个人/内网使用；快速启动和 Compose 默认仅面向本机。若要暴露到局域网/公网，请放在带身份认证、TLS 和访问控制的反向代理之后。
+- 飞书 Webhook 属于敏感凭据，请避免写入代码仓库、日志或公开截图；API 响应已设置 `Cache-Control: no-store`，减少浏览器/代理缓存敏感设置的风险。
+- Webhook 默认仅接受 HTTPS 且限制为飞书/Lark 官方域名，避免测试接口被当作任意 URL 请求器。若使用自建兼容代理，请通过 `TODO_ALLOWED_WEBHOOK_HOSTS` 显式加入域名。

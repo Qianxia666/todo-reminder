@@ -3,6 +3,7 @@ const state = {
     editingId: null,
     settings: {
         webhook_url: "",
+        deadline_notice_minutes: 30,
         daily_reminder_time: "09:00",
     },
 };
@@ -79,9 +80,9 @@ const uiText = {
         empty: "暂无任务，请先创建提醒",
         task: "任务",
         start: "开始",
-        end: "结束",
-        status: "提醒状态",
-        reminder: "提醒类型",
+        end: "截止",
+        status: "推送状态",
+        reminder: "频率",
         actions: "操作",
         edit: "编辑",
         delete: "删除",
@@ -300,7 +301,7 @@ function toBeijingComparableTime(value, mode, isEnd) {
     const suffix = mode === "day"
         ? (isEnd ? "T23:59:00+08:00" : "T00:00:00+08:00")
         : ":00+08:00";
-    const isoValue = mode === "day" ? `${value}${suffix}` : `${value}${suffix}`;
+    const isoValue = `${value}${suffix}`;
     const timestamp = new Date(isoValue).getTime();
     return Number.isNaN(timestamp) ? null : timestamp;
 }
@@ -484,6 +485,7 @@ async function loadSettings() {
         const data = await response.json();
         state.settings = {
             webhook_url: data.webhook_url || "",
+            deadline_notice_minutes: data.deadline_notice_minutes,
             daily_reminder_time: data.daily_reminder_time || "09:00",
         };
         selectors.deadline.value = data.deadline_notice_minutes;
@@ -519,6 +521,7 @@ async function handleSettingsSubmit(event) {
         const data = await response.json();
         state.settings = {
             webhook_url: data.webhook_url || "",
+            deadline_notice_minutes: data.deadline_notice_minutes,
             daily_reminder_time: data.daily_reminder_time || "09:00",
         };
         selectors.deadline.value = data.deadline_notice_minutes;

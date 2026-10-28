@@ -69,7 +69,7 @@ async function loadTasks(isManual) {
     } catch (error) {
         selectors.list.innerHTML = "";
         selectors.count.textContent = "0";
-        setStatus(error.message || text.loadError, true);
+        setStatus(error instanceof Error && error.message ? error.message : text.loadError, true);
     } finally {
         if (selectors.refresh) {
             selectors.refresh.disabled = false;

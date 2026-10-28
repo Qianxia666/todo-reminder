@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import math
 import os
 import sqlite3
 import uuid
-import math
 from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from .timezone import now_in_beijing
 
@@ -52,6 +52,24 @@ def _env_int(name: str, default: int, *, minimum: int) -> int:
 SQLITE_TIMEOUT_SECONDS = _env_float("TODO_SQLITE_TIMEOUT_SECONDS", 30.0, minimum=0.1)
 SQLITE_BUSY_TIMEOUT_MS = _env_int("TODO_SQLITE_BUSY_TIMEOUT_MS", 30000, minimum=0)
 NotificationType = Literal["start", "end", "daily"]
+SCHEMA_VERSION = 2
+
+TaskMutation = Callable[[Mapping[str, Any]], Tuple[Dict[str, Any], Sequence[NotificationType]]]
+
+_TASK_UPDATE_COLUMNS = frozenset(
+    {
+        "title",
+        "description",
+        "start_at",
+        "start_all_day",
+        "end_at",
+        "end_all_day",
+        "start_notified",
+        "end_notified",
+        "daily_reminder",
+        "last_daily_notified",
+    }
+)
 
 
 def _connect() -> sqlite3.Connection:
@@ -66,8 +84,14 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create tables, compatibility columns and lightweight indexes."""
+    """Create or migrate the SQLite schema without losing existing data."""
     with closing(_connect()) as conn:
+        current_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if current_version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Database schema version {current_version} is newer than this application supports ({SCHEMA_VERSION})"
+            )
+
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS tasks (
@@ -102,24 +126,35 @@ def init_db() -> None:
                 claimed_until TEXT NOT NULL,
                 PRIMARY KEY (task_id, notification_type, notification_key)
             );
-
-            CREATE INDEX IF NOT EXISTS idx_tasks_start_at ON tasks(start_at);
-            CREATE INDEX IF NOT EXISTS idx_tasks_end_at ON tasks(end_at);
-            CREATE INDEX IF NOT EXISTS idx_tasks_daily_reminder ON tasks(daily_reminder, end_at);
-            CREATE INDEX IF NOT EXISTS idx_reminder_claims_expiry ON reminder_claims(claimed_until);
-
-            INSERT INTO settings (id, webhook_url, deadline_notice_minutes, daily_reminder_time)
-            SELECT 1, '', 30, '09:00'
-            WHERE NOT EXISTS (SELECT 1 FROM settings WHERE id = 1);
             """
         )
+
+        # Compatibility columns must be added before indexes or statements that
+        # reference them. Older databases otherwise fail during application boot.
         _ensure_column(conn, "tasks", "daily_reminder", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "tasks", "last_daily_notified", "TEXT")
         _ensure_column(conn, "settings", "daily_reminder_time", "TEXT NOT NULL DEFAULT '09:00'")
         _ensure_column(conn, "reminder_claims", "claim_token", "TEXT NOT NULL DEFAULT ''")
+
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tasks_start_at ON tasks(start_at);
+            CREATE INDEX IF NOT EXISTS idx_tasks_end_at ON tasks(end_at);
+            CREATE INDEX IF NOT EXISTS idx_tasks_daily_reminder ON tasks(daily_reminder, end_at);
+            CREATE INDEX IF NOT EXISTS idx_reminder_claims_expiry ON reminder_claims(claimed_until);
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO settings (
+                id, webhook_url, deadline_notice_minutes, daily_reminder_time
+            ) VALUES (1, '', 30, '09:00')
+            """
+        )
         conn.execute(
             "UPDATE settings SET daily_reminder_time = COALESCE(NULLIF(daily_reminder_time, ''), '09:00') WHERE id = 1"
         )
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
 
 
@@ -160,7 +195,10 @@ def list_tasks() -> List[Dict[str, Any]]:
 
 def list_tasks_for_reminders() -> List[Dict[str, Any]]:
     """Return only tasks that may still produce reminders."""
-    now_iso = now_in_beijing().isoformat()
+    # Task inputs are minute-precision. Keep a task eligible through the whole
+    # configured end minute so a polling worker cannot miss a 17:00 reminder
+    # merely because it wakes at 17:00:15.
+    now_minute_iso = now_in_beijing().replace(second=0, microsecond=0).isoformat()
     with closing(_connect()) as conn:
         rows = conn.execute(
             """
@@ -171,7 +209,7 @@ def list_tasks_for_reminders() -> List[Dict[str, Any]]:
                OR (daily_reminder = 1 AND (end_at IS NULL OR end_at >= ?))
             ORDER BY start_at, COALESCE(end_at, start_at), id
             """,
-            (now_iso,),
+            (now_minute_iso,),
         ).fetchall()
     return [_row_to_task(row) for row in rows]
 
@@ -182,6 +220,10 @@ def get_task(task_id: int) -> Optional[Dict[str, Any]]:
 
 
 def create_task(data: Dict[str, Any]) -> Dict[str, Any]:
+    unknown_columns = set(data) - _TASK_UPDATE_COLUMNS
+    if unknown_columns:
+        raise ValueError(f"Unsupported task fields: {', '.join(sorted(unknown_columns))}")
+
     now_iso = now_in_beijing().isoformat()
     payload = {
         **data,
@@ -205,37 +247,134 @@ def create_task(data: Dict[str, Any]) -> Dict[str, Any]:
     return created
 
 
-def update_task(task_id: int, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def mutate_task(task_id: int, mutation: TaskMutation) -> Optional[Dict[str, Any]]:
+    """Read, derive and write a task under one SQLite write transaction.
+
+    This is used by partial API updates so concurrent requests cannot merge
+    against a stale snapshot and silently overwrite one another's changes.
+    """
+    with closing(_connect()) as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _fetch_task(conn, task_id)
+            if existing is None:
+                conn.commit()
+                return None
+
+            data, clear_claim_types = mutation(existing)
+            unknown_columns = set(data) - _TASK_UPDATE_COLUMNS
+            if unknown_columns:
+                raise ValueError(f"Unsupported task fields: {', '.join(sorted(unknown_columns))}")
+
+            payload = data.copy()
+            payload["updated_at"] = now_in_beijing().isoformat()
+            assignments = ", ".join(f"{key} = ?" for key in payload)
+            values = [*payload.values(), task_id]
+            conn.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", values)
+            _clear_notification_claims(conn, task_id, clear_claim_types)
+            updated = _fetch_task(conn, task_id)
+            conn.commit()
+            return updated
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def update_task(
+    task_id: int,
+    data: Dict[str, Any],
+    *,
+    clear_claim_types: Sequence[NotificationType] = (),
+) -> Optional[Dict[str, Any]]:
+    unknown_columns = set(data) - _TASK_UPDATE_COLUMNS
+    if unknown_columns:
+        raise ValueError(f"Unsupported task fields: {', '.join(sorted(unknown_columns))}")
+
     payload = data.copy()
     payload["updated_at"] = now_in_beijing().isoformat()
     assignments = ", ".join(f"{key} = ?" for key in payload.keys())
     values = list(payload.values()) + [task_id]
     with closing(_connect()) as conn:
-        existing = _fetch_task(conn, task_id)
-        if not existing:
-            return None
-        conn.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", values)
-        conn.commit()
-        return _fetch_task(conn, task_id)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _fetch_task(conn, task_id)
+            if not existing:
+                conn.commit()
+                return None
+            conn.execute(f"UPDATE tasks SET {assignments} WHERE id = ?", values)
+            _clear_notification_claims(conn, task_id, clear_claim_types)
+            updated = _fetch_task(conn, task_id)
+            conn.commit()
+            return updated
+        except Exception:
+            conn.rollback()
+            raise
 
 
-def delete_task(task_id: int) -> None:
+def delete_task(task_id: int) -> bool:
     with closing(_connect()) as conn:
-        conn.execute("DELETE FROM reminder_claims WHERE task_id = ?", (task_id,))
-        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-        conn.commit()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM reminder_claims WHERE task_id = ?", (task_id,))
+            cursor = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            conn.commit()
+            return cursor.rowcount == 1
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def _clear_notification_claims(
+    conn: sqlite3.Connection,
+    task_id: int,
+    notification_types: Sequence[NotificationType],
+) -> None:
+    if not notification_types:
+        return
+    placeholders = ", ".join("?" for _ in notification_types)
+    conn.execute(
+        f"DELETE FROM reminder_claims WHERE task_id = ? AND notification_type IN ({placeholders})",
+        (task_id, *notification_types),
+    )
 
 
 def clear_notification_claims(task_id: int, notification_types: Sequence[NotificationType]) -> None:
     if not notification_types:
         return
-    placeholders = ", ".join("?" for _ in notification_types)
     with closing(_connect()) as conn:
-        conn.execute(
-            f"DELETE FROM reminder_claims WHERE task_id = ? AND notification_type IN ({placeholders})",
-            (task_id, *notification_types),
-        )
+        _clear_notification_claims(conn, task_id, notification_types)
         conn.commit()
+
+
+def daily_notification_key(task: Dict[str, Any], daily_date: str) -> str:
+    """Build a daily claim key tied to the schedule snapshot being processed."""
+    return "|".join(
+        (
+            "v2",
+            daily_date,
+            str(task.get("start_at") or ""),
+            "1" if task.get("start_all_day") else "0",
+            str(task.get("end_at") or ""),
+            "1" if task.get("end_all_day") else "0",
+        )
+    )
+
+
+def _daily_notification_is_pending(row: sqlite3.Row, notification_key: str) -> bool:
+    daily_date = notification_key
+    if notification_key.startswith("v2|"):
+        parts = notification_key.split("|", 5)
+        if len(parts) != 6:
+            return False
+        _, daily_date, start_at, start_all_day, end_at, end_all_day = parts
+        if (
+            row["start_at"] != start_at
+            or bool(row["start_all_day"]) != (start_all_day == "1")
+            or (row["end_at"] or "") != end_at
+            or bool(row["end_all_day"]) != (end_all_day == "1")
+        ):
+            return False
+    return bool(row["daily_reminder"]) and row["last_daily_notified"] != daily_date
 
 
 def _notification_is_pending(
@@ -247,7 +386,7 @@ def _notification_is_pending(
     row = conn.execute(
         """
         SELECT start_at, end_at, start_notified, end_notified,
-               daily_reminder, last_daily_notified
+               start_all_day, end_all_day, daily_reminder, last_daily_notified
         FROM tasks
         WHERE id = ?
         """,
@@ -260,7 +399,7 @@ def _notification_is_pending(
     if notification_type == "end":
         return not row["end_notified"] and row["end_at"] is not None and row["end_at"] == notification_key
     if notification_type == "daily":
-        return bool(row["daily_reminder"]) and row["last_daily_notified"] != notification_key
+        return _daily_notification_is_pending(row, notification_key)
     raise ValueError(f"Unsupported notification type: {notification_type}")
 
 
@@ -271,6 +410,7 @@ def claim_notification_with_token(
     ttl_seconds: int,
 ) -> Optional[str]:
     """Atomically claim a current reminder slot and return its owner token."""
+    ttl_seconds = max(1, int(ttl_seconds))
     now = now_in_beijing()
     claim_until = now + timedelta(seconds=ttl_seconds)
     claim_token = uuid.uuid4().hex
@@ -316,7 +456,7 @@ def claim_notification_with_token(
             )
             conn.commit()
             return claim_token if cursor.rowcount == 1 else None
-        except sqlite3.Error:
+        except Exception:
             conn.rollback()
             raise
 
@@ -412,7 +552,7 @@ def complete_notification(
                 )
             conn.commit()
             return cursor.rowcount == 1
-        except sqlite3.Error:
+        except Exception:
             conn.rollback()
             raise
 
@@ -420,8 +560,18 @@ def complete_notification(
 def get_settings() -> Dict[str, Any]:
     with closing(_connect()) as conn:
         row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
-    if not row:
-        raise RuntimeError("settings row missing")
+        if not row:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO settings (
+                    id, webhook_url, deadline_notice_minutes, daily_reminder_time
+                ) VALUES (1, '', 30, '09:00')
+                """
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
+    if row is None:
+        raise RuntimeError("settings row missing after recovery")
     return {
         "webhook_url": row["webhook_url"] or "",
         "deadline_notice_minutes": row["deadline_notice_minutes"],
@@ -432,7 +582,14 @@ def get_settings() -> Dict[str, Any]:
 def update_settings(webhook_url: str, deadline_notice_minutes: int, daily_reminder_time: str) -> Dict[str, Any]:
     with closing(_connect()) as conn:
         conn.execute(
-            "UPDATE settings SET webhook_url = ?, deadline_notice_minutes = ?, daily_reminder_time = ? WHERE id = 1",
+            """
+            INSERT INTO settings (id, webhook_url, deadline_notice_minutes, daily_reminder_time)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                webhook_url = excluded.webhook_url,
+                deadline_notice_minutes = excluded.deadline_notice_minutes,
+                daily_reminder_time = excluded.daily_reminder_time
+            """,
             (webhook_url, deadline_notice_minutes, daily_reminder_time),
         )
         conn.commit()
