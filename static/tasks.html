@@ -3,47 +3,48 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <meta name="theme-color" content="#f7f8fa" />
-    <title>任务时间线 - 任务提醒</title>
+    <meta name="theme-color" content="#e6e3d9" />
+    <title>任务时间线 · 日程本</title>
     <link rel="stylesheet" href="/static/styles.css" />
 </head>
-<body class="timeline-page">
-    <header class="topbar">
-        <div class="topbar-inner">
-            <a class="brand" href="/" aria-label="任务提醒首页">
-                <span class="brand-mark" aria-hidden="true">T</span>
-                <span class="brand-name">任务提醒</span>
-            </a>
-            <nav class="main-nav" aria-label="主导航">
-                <a class="nav-link" href="/">任务管理</a>
-                <a class="nav-link active" href="/tasks" aria-current="page">时间线</a>
-            </nav>
+<body class="book-page">
+<div class="sheet">
+
+    <header class="mast">
+        <div class="mast-left">
+            <span class="mast-no">№ 02</span>
+            <h1>任务时间线</h1>
+            <p class="mast-sub">从早到晚排开，看看这一段时间里压了多少事。</p>
+        </div>
+        <div class="mast-right">
+            <time class="mast-date" id="mast-date">—</time>
+            <span class="mast-zone">按开始时间排序</span>
         </div>
     </header>
 
-    <div class="app-shell timeline-shell">
-        <header class="page-heading">
-            <div>
-                <p class="page-kicker">总览</p>
-                <h1>任务时间线</h1>
-            </div>
-            <p class="page-context">按开始时间从早到晚排列</p>
-        </header>
+    <nav class="book-nav" aria-label="主导航">
+        <a class="book-link" href="/">任务管理</a>
+        <a class="book-link is-current" href="/tasks" aria-current="page">时间线</a>
+        <span class="nav-grow"></span>
+        <span class="nav-count">共 <strong id="timeline-count">0</strong> 条</span>
+        <button type="button" class="nav-refresh" id="refresh-timeline" aria-label="刷新任务" title="刷新任务">
+            <span aria-hidden="true">↻</span> 刷新
+        </button>
+    </nav>
 
-        <main class="timeline-main">
-            <section class="timeline-workspace">
-                <div class="timeline-toolbar">
-                    <div class="timeline-count">共 <strong id="timeline-count">0</strong> 条任务</div>
-                    <button type="button" class="icon-button" id="refresh-timeline" aria-label="刷新任务" title="刷新任务">
-                        <span aria-hidden="true">↻</span>
-                    </button>
-                </div>
-                <div id="timeline-status" class="status-line hidden" role="status" aria-live="polite"></div>
-                <div id="timeline-list" class="timeline-list" role="list"></div>
-            </section>
-        </main>
-    </div>
+    <main class="timeline-main">
+        <div id="timeline-status" class="status-line hidden" role="status" aria-live="polite"></div>
+        <div id="timeline-list" class="timeline-list" role="list"></div>
+    </main>
 
-    <script type="module" src="/static/tasks.js"></script>
+    <footer class="sheet-foot">
+        <span>任务提醒 · 时间线</span>
+        <span class="foot-grow"></span>
+        <span>圆点为开始时间，短横为截止</span>
+    </footer>
+</div>
+
+<script src="/static/mast.js"></script>
+<script src="/static/tasks.js" type="module"></script>
 </body>
 </html>

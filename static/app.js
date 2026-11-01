@@ -91,8 +91,8 @@ const uiText = {
         startDone: "已推送开始提醒",
         startPending: "等待开始提醒",
         endDone: "已推送结束提醒",
-        endPending: "等待结束提醒",
-        endMissing: "未设结束提醒",
+        endPending: "等待截止提醒",
+        endMissing: "未设置截止提醒",
     },
     reminderModes: {
         daily: "每日提醒",
@@ -158,11 +158,32 @@ function updateOverviewMetrics() {
     selectors.metricPendingEnd.textContent = String(pendingEndCount);
     selectors.metricWebhookState.textContent = webhookConfigured ? "已启用" : "未配置";
     selectors.metricWebhookState.classList.toggle("is-muted", !webhookConfigured);
-    selectors.metricDailyTime.textContent = `每日提醒时间：${state.settings.daily_reminder_time || "09:00"}`;
+    selectors.metricDailyTime.textContent = webhookConfigured
+        ? `每日 ${state.settings.daily_reminder_time || "09:00"} 推送`
+        : "留空时暂停所有推送";
+}
+
+function initDateTimeShells() {
+    document.querySelectorAll(".dt-shell").forEach((shell) => {
+        const input = shell.querySelector("input");
+        if (!input) return;
+        const sync = () => shell.classList.toggle("has-value", Boolean(input.value));
+        input.addEventListener("input", sync);
+        input.addEventListener("change", sync);
+        input.addEventListener("blur", sync);
+        sync();
+        shell._sync = sync;
+    });
 }
 
 function init() {
+    initDateTimeShells();
     document.getElementById("task-form").addEventListener("submit", handleTaskSubmit);
+    selectors.dailyReminderTime.addEventListener("blur", () => {
+        const raw = selectors.dailyReminderTime.value.trim();
+        const m = raw.match(/^(\d{1,2}):?(\d{2})$/);
+        if (m) selectors.dailyReminderTime.value = `${m[1].padStart(2, "0")}:${m[2]}`;
+    });
     document.getElementById("settings-form").addEventListener("submit", handleSettingsSubmit);
     selectors.testWebhook.addEventListener("click", handleTestWebhook);
     selectors.cancelEdit.addEventListener("click", resetTaskForm);
@@ -277,9 +298,9 @@ function formatBeijingTime(value) {
 }
 
 function formatDateDisplay(value, allDay) {
-    if (!value) return "--";
+    if (!value) return "未设置";
     const datePart = formatBeijingDate(value);
-    if (!datePart) return "--";
+    if (!datePart) return "未设置";
     if (allDay) {
         return `${datePart} 全天`;
     }
@@ -383,6 +404,13 @@ function resetTaskForm() {
     setTaskStatus("", false);
     syncStartModeVisibility();
     syncEndModeVisibility();
+    syncDateTimeShells();
+}
+
+function syncDateTimeShells() {
+    document.querySelectorAll(".dt-shell").forEach((shell) => {
+        if (shell._sync) shell._sync();
+    });
 }
 
 function beginEditTask(taskId) {
@@ -423,6 +451,7 @@ function beginEditTask(taskId) {
     selectors.cancelEdit.classList.remove("hidden");
     syncStartModeVisibility();
     syncEndModeVisibility();
+    syncDateTimeShells();
     selectors.title.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
